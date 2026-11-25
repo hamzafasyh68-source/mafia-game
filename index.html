@@ -1,0 +1,332 @@
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مافيا</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{background:#101014;color:white;font-family:Arial;text-align:center;padding:18px}
+h1{font-size:45px;color:#e53945}
+h2{color:#ff626b}
+.box{background:#202027;padding:18px;border-radius:15px;margin:15px auto;max-width:500px}
+input,select,button{padding:13px;margin:7px;border:0;border-radius:9px;font-size:16px}
+input,select{width:90%;max-width:330px}
+button{background:#c62835;color:white;cursor:pointer}
+.player{background:#303039;padding:12px;border-radius:9px;margin:7px}
+.hidden{display:none}
+.small{color:#bbb;font-size:14px}
+#role{font-size:28px;color:#ff626b;font-weight:bold}
+</style>
+</head>
+<body>
+
+<h1>مافيا</h1>
+<p>أهلاً بك في لعبة المافيا</p>
+
+<section id="home" class="box">
+<h2>ابدأ اللعب الآن</h2>
+<input id="myName" placeholder="اسمك">
+<button onclick="createRoom()">إنشاء غرفة جديدة</button>
+<hr>
+<input id="joinName" placeholder="اسمك">
+<input id="roomCode" placeholder="رمز الغرفة">
+<button onclick="joinRoom()">دخول الغرفة</button>
+<p id="message" class="small"></p>
+</section>
+
+<section id="host" class="box hidden">
+<h2>غرفة المافيا</h2>
+<p>رمز الغرفة:</p>
+<h2 id="roomLabel"></h2>
+<button onclick="copyCode()">نسخ الرمز</button>
+<p class="small">خلي صفحة منشئ الغرفة مفتوحة طوال اللعبة</p>
+<h3>اللاعبون</h3>
+<div id="hostPlayers"></div>
+
+<div id="leaderChoice">
+<h3>اختيار الليدر</h3>
+<select id="leaderSelect"></select>
+<button onclick="chooseLeader()">تأكيد اختيار الليدر</button>
+<p id="leaderStatus"></p>
+</div>
+
+<div id="hostLeader" class="hidden">
+<h2>أنت الليدر 👑</h2>
+<p>أنت لا تحصل على كرت ولا تصوّت.</p>
+<button onclick="startGame()">ابدأ الجولة</button>
+<h3>كشف كرت لاعب</h3>
+<select id="hostReveal"></select>
+<button onclick="revealCard()">اكشف الكرت للجميع</button>
+</div>
+
+<div id="hostPlayer" class="hidden">
+<h2>كرتك السري</h2>
+<div id="hostRole" class="role">بانتظار توزيع الكروت</div>
+<div id="hostVoteArea">
+<h3>صوّت للاعب</h3>
+<select id="hostVote"></select>
+<button onclick="vote(hostPeerId)">إرسال التصويت</button>
+</div>
+</div>
+<h3>نتائج التصويت</h3>
+<div id="hostVotes"></div>
+<div id="hostRevealResult"></div>
+</section>
+
+<section id="guest" class="box hidden">
+<h2>غرفة المافيا</h2>
+<p id="guestStatus">تم الاتصال بالغرفة</p>
+
+<div id="guestRoleBox" class="hidden">
+<h3>كرتك السري</h3>
+<div id="guestRole" style="font-size:28px;color:#ff626b"></div>
+</div>
+
+<div id="guestLeader" class="hidden">
+<h2>أنت الليدر 👑</h2>
+<p>أنت لا تحصل على كرت ولا تصوّت.</p>
+<button onclick="sendStart()">ابدأ الجولة</button>
+<h3>كشف كرت لاعب</h3>
+<select id="guestReveal"></select>
+<button onclick="sendReveal()">اكشف الكرت للجميع</button>
+</div>
+
+<div id="guestVoteArea" class="hidden">
+<h3>التصويت</h3>
+<select id="guestVote"></select>
+<button onclick="vote(hostPeerId)">إرسال التصويت</button>
+<p id="voteStatus"></p>
+</div>
+
+<h3>نتائج التصويت</h3>
+<div id="guestVotes"></div>
+<div id="guestRevealResult"></div>
+</section>
+
+<script>
+let peer,hostPeerId,hostMode=false,hostSelfId="";
+let myName="",myRole="",leaderId="";
+let players={};
+let connections={};
+let roles={};
+let votes={};
+let started=false;
+let revealed=null;
+let selectedLeader=false;
+
+const $=id=>document.getElementById(id);
+function show(id){
+["home","host","guest"].forEach(x=>$(x).classList.add("hidden"));
+$(id).classList.remove("hidden");
+}
+function say(t){$("message").textContent=t}
+function safe(t){
+return String(t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function createRoom(){
+myName=$("myName").value.trim();
+if(!myName)return say("اكتب اسمك أولاً");
+hostMode=true;
+peer=new Peer();
+peer.on("open",id=>{
+hostSelfId=id;
+hostPeerId=id;
+players[id]={id,name:myName};
+$("roomLabel").textContent=id;
+show("host");
+renderHost();
+});
+peer.on("connection",conn=>{
+connections[conn.peer]=conn;
+conn.on("data",data=>handleHostData(conn,data));
+});
+peer.on("error",e=>say("خطأ اتصال: "+e.type));
+}
+
+function joinRoom(){
+myName=$("joinName").value.trim();
+hostPeerId=$("roomCode").value.trim();
+if(!myName||!hostPeerId)return say("اكتب اسمك ورمز الغرفة");
+peer=new Peer();
+peer.on("open",id=>{
+let conn=peer.connect(hostPeerId);
+connections.host=conn;
+conn.on("open",()=>{
+conn.send({type:"join",name:myName});
+show("guest");
+$("guestStatus").textContent="متصل بالغرفة، بانتظار الليدر";
+});
+conn.on("data",handleGuestData);
+conn.on("error",()=>{$("guestStatus").textContent="انقطع الاتصال";});
+});
+peer.on("error",e=>say("تعذر الاتصال: "+e.type));
+}
+
+function sendTo(id,data){
+if(id===hostSelfId)return;
+let c=connections[id];
+if(c&&c.open)c.send(data);
+}
+function broadcast(data){
+Object.keys(connections).forEach(id=>{
+let c=connections[id];
+if(c&&c.open)c.send(data);
+});
+}
+function state(){
+return {
+type:"state",
+players:Object.values(players),
+leaderId,started,
+votes:voteSummary(),
+revealed
+};
+}
+function updateAll(){
+renderHost();
+broadcast(state());
+}
+function handleHostData(conn,d){
+if(d.type==="join"&&!started){
+players[conn.peer]={id:conn.peer,name:String(d.name||"لاعب").slice(0,25)};
+updateAll();
+}
+if(d.type==="leaderStart"&&conn.peer===leaderId)startGame();
+if(d.type==="leaderReveal"&&conn.peer===leaderId)doReveal(d.target);
+if(d.type==="vote"&&started&&conn.peer!==leaderId)doVote(conn.peer,d.target);
+}
+
+function renderHost(){
+$("hostPlayers").innerHTML=Object.values(players).map(p=>
+'<div class="player">'+safe(p.name)+(p.id===leaderId?" 👑":"")+'</div>'
+).join("");
+$("leaderSelect").innerHTML=Object.values(players).map(p=>
+'<option value="'+p.id+'">'+safe(p.name)+'</option>'
+).join("");
+$("hostReveal").innerHTML=$("leaderSelect").innerHTML;
+$("hostVote").innerHTML=Object.values(players).filter(p=>p.id!==hostSelfId&&p.id!==leaderId).map(p=>
+'<option value="'+p.id+'">'+safe(p.name)+'</option>'
+).join("");
+$("hostLeader").classList.toggle("hidden",leaderId!==hostSelfId);
+$("hostPlayer").classList.toggle("hidden",!started||leaderId===hostSelfId);
+$("leaderChoice").classList.toggle("hidden",started);
+$("hostRole").textContent=myRole||"بانتظار توزيع الكروت";
+$("hostVotes").innerHTML=voteHTML();
+if(revealed)$("hostRevealResult").textContent=revealed.name+" — "+revealed.role;
+}
+
+function chooseLeader(){
+if(started)return;
+leaderId=$("leaderSelect").value;
+if(!leaderId)return alert("اختار الليدر");
+$("leaderStatus").textContent="الليدر المختار: "+players[leaderId].name;
+updateAll();
+}
+
+function buildDeck(count){
+let deck=["لاكي","مافيا التسكيت","محقق","طبيب","قناص الصالحين","عمدة الصالحين","ولد الصالحين"];
+if(count>=9)deck.push("وريث المافيا");
+if(count>=10)deck.push("وريث المافيا الثاني");
+if(count>=11)deck.push("وريث المافيا الثالث");
+while(deck.length<count)deck.push("مواطن");
+return deck.sort(()=>Math.random()-.5);
+}
+
+function startGame(){
+if(leaderId!==hostSelfId)return;
+if(Object.keys(players).length<4)return alert("لازم يكون في 4 أشخاص على الأقل مع الليدر");
+if(!leaderId)return alert("اختار الليدر أولاً");
+let active=Object.values(players).filter(p=>p.id!==leaderId);
+let deck=buildDeck(active.length);
+roles={};votes={};revealed=null;started=true;
+active.forEach((p,i)=>{
+roles[p.id]=deck[i];
+if(p.id===hostSelfId)myRole=deck[i];
+else sendTo(p.id,{type:"role",role:deck[i]});
+});
+updateAll();
+alert("تم توزيع الكروت بنجاح!");
+}
+
+function doVote(voter,target){
+if(!started||voter===leaderId||!players[target]||target===voter||target===leaderId)return;
+if(votes[voter])return;
+votes[voter]=target;
+updateAll();
+}
+function vote(id){
+let target=$(id===hostSelfId?"hostVote":"guestVote").value;
+if(!target)return alert("اختار لاعباً");
+if(id===hostSelfId)doVote(hostSelfId,target);
+else connections.host.send({type:"vote",target});
+$("voteStatus").textContent="تم إرسال صوتك";
+}
+function voteSummary(){
+let result={};
+Object.values(votes).forEach(id=>result[id]=(result[id]||0)+1);
+return result;
+}
+function voteHTML(){
+let s=voteSummary();
+return Object.values(players).map(p=>
+'<div class="player">'+safe(p.name)+': '+(s[p.id]||0)+' صوت</div>'
+).join("");
+}
+
+function doReveal(id){
+if(!roles[id])return;
+revealed={name:players[id].name,role:roles[id]};
+broadcast({type:"reveal",data:revealed});
+renderHost();
+}
+function revealCard(){
+if(leaderId!==hostSelfId)return;
+doReveal($("hostReveal").value);
+}
+function sendStart(){
+connections.host.send({type:"leaderStart"});
+}
+function sendReveal(){
+connections.host.send({type:"leaderReveal",target:$("guestReveal").value});
+}
+
+function handleGuestData(d){
+if(d.type==="state"){
+players={};
+d.players.forEach(p=>players[p.id]=p);
+leaderId=d.leaderId;started=d.started;revealed=d.revealed;
+renderGuest(d.votes||{});
+}
+if(d.type==="role"){
+myRole=d.role;
+$("guestRole").textContent=myRole;
+$("guestRoleBox").classList.remove("hidden");
+}
+if(d.type==="reveal"){
+revealed=d.data;
+$("guestRevealResult").textContent=revealed.name+" — "+revealed.role;
+}
+}
+function renderGuest(summary){
+let isLeader=leaderId===peer.id;
+$("guestLeader").classList.toggle("hidden",!isLeader);
+$("guestVoteArea").classList.toggle("hidden",!started||isLeader);
+$("guestRoleBox").classList.toggle("hidden",!started||isLeader||!myRole);
+$("guestStatus").textContent=isLeader?"أنت الليدر 👑":started?"اللعبة بدأت":"بانتظار بدء اللعبة";
+let options=Object.values(players).filter(p=>p.id!==peer.id&&p.id!==leaderId);
+$("guestVote").innerHTML=options.map(p=>'<option value="'+p.id+'">'+safe(p.name)+'</option>').join("");
+$("guestReveal").innerHTML=Object.values(players).filter(p=>p.id!==leaderId).map(p=>'<option value="'+p.id+'">'+safe(p.name)+'</option>').join("");
+$("guestVotes").innerHTML=Object.values(players).map(p=>'<div class="player">'+safe(p.name)+': '+(summary[p.id]||0)+' صوت</div>').join("");
+if(revealed)$("guestRevealResult").textContent=revealed.name+" — "+revealed.role;
+}
+function copyCode(){
+if(navigator.clipboard)navigator.clipboard.writeText(hostPeerId).then(()=>alert("تم نسخ الرمز")).catch(()=>alert(hostPeerId));
+else alert(hostPeerId);
+}
+</script>
+</body>
+</html>
